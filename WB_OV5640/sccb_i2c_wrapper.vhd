@@ -6,23 +6,35 @@ USE ieee.numeric_std.ALL;
 LIBRARY work;
 
 ENTITY sccb_i2c_wrapper IS
-	GENERIC (
-		INPUT_CLK_HZ : INTEGER := 72_000_000;
-		BUS_CLK_HZ : INTEGER := 400_000
-	);
-	PORT (
-		clk : IN Std_ulogic;
-		reset : IN Std_ulogic;
-		--SCCB pins
-		SIO_C : INOUT Std_ulogic;
-		SIO_D : INOUT Std_ulogic;
-		--control
-		start : IN Std_ulogic; --1 to start
-		busy : OUT Std_ulogic; --0 = idle. 1 = busy
-		done : OUT Std_ulogic; --0 = not done. 1 = busy
-		err : OUT Std_ulogic --Included because the I2C controller has it
-	);
+    GENERIC (
+        INPUT_CLK_HZ : INTEGER := 72_000_000;
+        BUS_CLK_HZ   : INTEGER := 400_000
+    );
+    PORT (
+        clk   : IN  Std_ulogic;
+        reset : IN  Std_ulogic;
+        
+        --SCCB pins
+        SIO_C : INOUT Std_ulogic;
+        SIO_D : INOUT Std_ulogic;
+        
+        --Boot-time ROM programming control
+        boot_start : IN  Std_ulogic;  --1 to start boot sequence
+        boot_busy  : OUT Std_ulogic;  --1 during boot programming
+        boot_done  : OUT Std_ulogic;  --1 when boot complete
+        boot_err   : OUT Std_ulogic;  --1 if boot encountered error
+        
+        --Manual single-register write control
+        manual_req      : IN  Std_ulogic;  --Pulse 1 to request write
+        manual_ack      : OUT Std_ulogic;  --1 when request accepted
+        manual_reg_addr : IN  Std_logic_vector(15 DOWNTO 0);
+        manual_reg_data : IN  Std_logic_vector(7 DOWNTO 0);
+        manual_busy     : OUT Std_ulogic;  --1 during manual write
+        manual_done     : OUT Std_ulogic;  --1 when manual write done
+        manual_err      : OUT Std_ulogic   --1 if error when writing
+    );
 END;
+
 
 ARCHITECTURE rtl OF sccb_i2c_wrapper IS
 
@@ -59,9 +71,25 @@ ARCHITECTURE rtl OF sccb_i2c_wrapper IS
 	--ROM Tables
 	TYPE ov5640_reg_addr_arr IS ARRAY (NATURAL RANGE <>) OF Std_logic_vector(15 DOWNTO 0); --OV5640 address array type
 	TYPE ov5640_reg_data_arr IS ARRAY (NATURAL RANGE <>) OF Std_logic_vector(7 DOWNTO 0); --OV5640 data arrays
-	SIGNAL ov5640_reg_addr : ov5640_reg_addr_arr(0 TO 45) := (
+
+	
+	SIGNAL ov5640_reg_addr : ov5640_reg_addr_arr(0 TO 54) := (
 		x"3103", x"3008", x"3008", 
 		x"3017", x"3018", 
+
+		--PLL settings
+		x"3103",
+
+		x"3034",  --PLL charge pump control
+		x"3035",  --System clock divider  
+		x"3036",  --PLL multiplier
+		x"3037",  --PLL pre divider
+		x"3108",  --PCLK root divider
+		x"3824",  --PCLK divider controller for DVP
+		x"460C",  --PCLK manual control
+		x"4837",  --PCLK 
+		--x"3103",
+
 		x"4300", 
 		x"501F", 
 		x"4740", 
@@ -95,9 +123,22 @@ ARCHITECTURE rtl OF sccb_i2c_wrapper IS
 		x"3008"
 	);
 
-	SIGNAL ov5640_reg_data : ov5640_reg_data_arr(0 TO 45) := (
+	SIGNAL ov5640_reg_data : ov5640_reg_data_arr(0 TO 54) := (
 		x"11", x"82", x"42", --0x3103, 0x3008, 0x3008 (first reset and then software power down)
 		x"FF", x"FF", --0x3017, 0x3018. (VSYNC is an output pin and must use a register-controlled value)
+
+		--PLL settings
+		x"03",
+
+		x"1A",  --0x3034 (default)
+		x"21",  --0x3035 (System divider = /2)
+		x"46",  --0x3036 (PLL multiplier = 105)
+		x"13",  --0x3037 (Pre divider = /1)
+		x"01",  --0x3108 (PCLK divider = /1)
+		x"02",  --0x3824 (DVP PCLK Divider value from application datasheet as the main datasheet has no values for it)
+		x"22",  --0x460C (Enable PCLK manual divider)
+		x"22",
+
 		x"30", --0x4300 (YUV422 YUYV)
 		x"00", --0x501F (ISP YUV422)
 		x"20", --0x4740 for signal polarity (PCLK high, VSYNC/HREF low)
@@ -114,14 +155,14 @@ ARCHITECTURE rtl OF sccb_i2c_wrapper IS
 		x"50", --0x3A1B
 		x"48", --0x3A1E
 		x"90", --0x3A11
-		x"20", --0x3A1F
+		x"21", --0x3A1F
 
 		--Settings for 100x100 window
 		--Best to program all because it makes (made) experimenting easier
 		x"00", x"08", x"00", x"02", --0x3800 - 0x3803
 		x"0A", x"37", x"07", x"A1", --0x3804 - 0x3807
 		x"00", x"64", x"00", x"64", --0x3808 - 0x380B (actual resolution)
-		x"06", x"14", x"03", x"E8", --0x380C - 0x380F
+		x"06", x"14", x"03", x"D8", --0x380C - 0x380F
 		x"00", x"04", x"00", x"02", --0x3810 - 0x3813
 		x"31", x"31", --0x3814 and 0x3815
 
@@ -131,6 +172,7 @@ ARCHITECTURE rtl OF sccb_i2c_wrapper IS
 		x"58", --0x300E (select DVP)
 		x"02" --0x3008 wake from soft power down
 	);
+	
 
 	SIGNAL table_length : NATURAL := ov5640_reg_addr'Length; --ROM table Length
 
@@ -149,17 +191,35 @@ ARCHITECTURE rtl OF sccb_i2c_wrapper IS
 	ATTRIBUTE syn_ramstyle OF ov5640_reg_data : SIGNAL IS "block_ram";
 
 	--Delay counter for power-up timing
-
-	CONSTANT CYCLES_5MS : INTEGER := (INPUT_CLK_HZ / 1000) * 5; --5ms delay
+	CONSTANT CYCLES_5MS : INTEGER := (INPUT_CLK_HZ / 1000) * 10; --5ms delay
 	SIGNAL powerup_delay_counter : INTEGER RANGE 0 TO CYCLES_5MS := 0;
+	
 	--FSM
 	--3-phase write transmission according to the user manual: ID address -> High byte of 16- bit address -> Low byte of 16-bit address -> Value
 	TYPE state_t IS (SCCB_IDLE, SCCB_BEGIN, SCCB_ADDR_WRITE_UPPER, SCCB_ADDR_LOAD_LOWER, SCCB_ADDR_WRITE_LOWER, SCCB_ADDR_WAIT, SCCB_DATA_LOAD, SCCB_DATA_WAIT, SCCB_DATA_WRITE, SCCB_STOP_WAIT, SCCB_WAIT_5MS, SCCB_DONE);
 	SIGNAL state : state_t := SCCB_IDLE;
+	
+    --Operation mode
+	--Idle, auto (programmer), manual (user programmed)
+    TYPE mode_t IS (MODE_IDLE, MODE_BOOT, MODE_MANUAL);
+    SIGNAL current_mode : mode_t := MODE_IDLE;
+    
+    --Manual request capture
+    SIGNAL manual_req_latched : Std_ulogic := '0';
+    
+    --Boot/manual status tracking
+    SIGNAL boot_in_progress  : Std_ulogic := '0';
+    SIGNAL manual_transaction_done : Std_ulogic := '0';
 BEGIN
-	busy <= '1' WHEN (state /= SCCB_IDLE AND state /= SCCB_DONE) ELSE '0';
-	done <= '1' WHEN (state = SCCB_DONE) ELSE '0';
-	err <= i2c_ack_error;
+    --Status outputs
+    boot_busy  <= '1' WHEN (current_mode = MODE_BOOT) ELSE '0';
+    boot_done  <= '1' WHEN (boot_in_progress = '1' AND state = SCCB_DONE) ELSE '0';
+    boot_err   <= i2c_ack_error WHEN (current_mode = MODE_BOOT) ELSE '0';
+    
+    manual_busy <= '1' WHEN (current_mode = MODE_MANUAL AND state /= SCCB_IDLE) ELSE '0';
+    manual_done <= manual_transaction_done;
+    manual_err  <= i2c_ack_error WHEN (current_mode = MODE_MANUAL) ELSE '0';
+	
 	i2c_controller_inst : i2c_controller
 	PORT MAP(
 		clk => clk, 
@@ -175,40 +235,65 @@ BEGIN
 		SCL => SIO_C
 	);
 
+
+
 	--FSM Process
 	--3-phase write transmission according to the user manual: ID address -> High byte of 16- bit address -> Low byte of 16-bit address -> Value
 	--I2C is a stricter protocol than SCCB: Start -> data address -> register addresses -> data. The ACK bit does not matter in SCCB
 	--The FSM is only worked through once, when start rise is 1
-	PROCESS (clk)
-	BEGIN
-		IF rising_edge(clk) THEN
-			IF (reset = '1') THEN
-				table_index <= 0;
-				state <= SCCB_IDLE;
-				i2c_ena <= '0';
-				i2c_rw <= '0';
-				i2c_data_wr <= (OTHERS => '0');
-				powerup_delay_counter <= 0;
-			ELSE
-				CASE state IS
-					WHEN SCCB_IDLE => 
-						--Idle until start is asserted
-						i2c_ena <= '0';
-						IF (start = '1') THEN
-							table_index <= 0;
-							state <= SCCB_BEGIN;
-						END IF;
-
-					WHEN SCCB_BEGIN
-						=> 
+	--Conditions are added to differentiate between manual and boot modes
+PROCESS (clk)
+BEGIN
+    IF (rising_edge(clk)) THEN
+        IF (reset = '1') THEN
+            table_index <= 0;
+            state <= SCCB_IDLE;
+            current_mode <= MODE_IDLE;
+            i2c_ena <= '0';
+            i2c_rw <= '0';
+            i2c_data_wr <= (OTHERS => '0');
+            powerup_delay_counter <= 0;
+            manual_req_latched <= '0';
+            manual_ack <= '0';
+            manual_transaction_done <= '0';
+            boot_in_progress <= '0';
+            
+        ELSE
+            --Clear pulses
+            manual_ack <= '0';
+            manual_transaction_done <= '0';
+            
+            CASE state IS
+                WHEN SCCB_IDLE =>
+                    i2c_ena <= '0';
+                    --First complete the boot programming sequence
+                    IF (boot_start = '1' AND current_mode = MODE_IDLE) THEN
+                        current_mode <= MODE_BOOT;
+                        boot_in_progress <= '1';
+                        table_index <= 0;
+                        state <= SCCB_BEGIN;
+                    
+                    --Manual programming
+                    ELSIF (manual_req = '1' AND current_mode = MODE_IDLE) THEN
+                        current_mode <= MODE_MANUAL;
+                        manual_ack <= '1';  --Acknowledge manual request
+                        state <= SCCB_BEGIN;
+                    END IF;
+                
+                WHEN SCCB_BEGIN =>
 
 						--We want to send two address (upper and lower byte), so we must ensure ENA remains high. the i2C controller hndles the device address logic
 						--Begin transaction. First byte after device address is upper byte of reg address so load that
 						i2c_rw <= '0'; --Write command
 						i2c_ena <= '1'; --Latched to initiate a transaction
-						i2c_data_wr <= reg_addr_loaded(15 DOWNTO 8); --Get the upper byte of the address
+						IF (current_mode = MODE_MANUAL) THEN
+							i2c_data_wr <= manual_reg_addr(15 DOWNTO 8);
+						ELSE
+							i2c_data_wr <= reg_addr_loaded(15 DOWNTO 8);
+						END IF;
+						--i2c_data_wr <= reg_addr_loaded(15 DOWNTO 8); --Get the upper byte of the address
 						state <= SCCB_ADDR_WRITE_UPPER;
-
+                
 					WHEN SCCB_ADDR_WRITE_UPPER => 
 						--Wait until controller indicates transaction has started by setting busy
 						IF (i2c_ack_error = '1') THEN --OV5640 is unknown territory. I am using the error signal.
@@ -218,12 +303,17 @@ BEGIN
 							--Preload next byte while controller is busy with current byte
 							state <= SCCB_ADDR_LOAD_LOWER;
 						END IF;
-
+                
 					WHEN SCCB_ADDR_LOAD_LOWER => 
 						--Load lower byte of reg address while upper address byte is being sent
-						i2c_data_wr <= reg_addr_loaded(7 DOWNTO 0);
+						IF (current_mode = MODE_MANUAL) THEN
+							i2c_data_wr <= manual_reg_addr(7 DOWNTO 0);
+						ELSE
+							i2c_data_wr <= reg_addr_loaded(7 DOWNTO 0);
+						END IF;
+						--i2c_data_wr <= reg_addr_loaded(7 DOWNTO 0);
 						state <= SCCB_ADDR_WAIT;
-
+                
 					WHEN SCCB_ADDR_WAIT => 
 						--Wait until busy is 0 indicating the byte has been transmitted
 						IF (i2c_ack_error = '1') THEN --OV5640 is unknown territory. I am using the error signal.
@@ -232,7 +322,7 @@ BEGIN
 						ELSIF (i2c_busy = '0') THEN
 							state <= SCCB_ADDR_WRITE_LOWER;
 						END IF;
-
+                
 					WHEN SCCB_ADDR_WRITE_LOWER => 
 						--Load data byte while lower reg-address byte is sent
 						IF (i2c_ack_error = '1') THEN --OV5640 is unknown territory. I am using the error signal.
@@ -242,12 +332,17 @@ BEGIN
 							--i2c_data_wr <= reg_data_loaded;
 							state <= SCCB_DATA_LOAD;
 						END IF;
-
+                
 					WHEN SCCB_DATA_LOAD => 
 						--Load data byte until the lower address byte is sent
-						i2c_data_wr <= reg_data_loaded;
+						IF (current_mode = MODE_MANUAL) THEN
+							i2c_data_wr <= manual_reg_data;
+						ELSE
+							i2c_data_wr <= reg_data_loaded;
+						END IF;
+						--i2c_data_wr <= reg_data_loaded;
 						state <= SCCB_DATA_WAIT;
-
+                
 					WHEN SCCB_DATA_WAIT => 
 						--Wait until busy is 0 indicating the byte has been transmitted
 						IF (i2c_ack_error = '1') THEN --OV5640 is unknown territory. I am using the error signal.
@@ -258,7 +353,7 @@ BEGIN
 							i2c_ena <= '0';
 							state <= SCCB_DATA_WRITE;
 						END IF;
-
+                
 					WHEN SCCB_DATA_WRITE => 
 						--Wait for the data-byte transfer to actually start,
 						--then deassert ENA so the controller will STOP after the data byte.
@@ -266,37 +361,55 @@ BEGIN
 							i2c_ena <= '0'; --No data after this byte
 							state <= SCCB_STOP_WAIT;
 						END IF;
-
-					WHEN SCCB_STOP_WAIT => 
-						--Wait for transaction to complete (data byte finished + STOP condition)
-						IF (i2c_busy = '0') THEN
+                
+                WHEN SCCB_STOP_WAIT =>
+					--Wait for transaction to complete (data byte finished + STOP condition)
+                    IF (i2c_busy = '0') THEN
+                        IF (current_mode = MODE_MANUAL) THEN
+                            state <= SCCB_WAIT_5MS;
+                        ELSE  
 							IF (table_index = table_length - 1) THEN
 								state <= SCCB_DONE;
 							ELSE
 								table_index <= table_index + 1;
 								state <= SCCB_WAIT_5MS;
 							END IF;
-						END IF;
-
-					WHEN SCCB_WAIT_5MS => 
-						--Wait for 5ms before writing to the next register
-						IF (powerup_delay_counter < CYCLES_5MS - 1) THEN
-							powerup_delay_counter <= powerup_delay_counter + 1;
-						ELSE
-							powerup_delay_counter <= 0;
+                        END IF;
+                    END IF;
+                
+                WHEN SCCB_WAIT_5MS =>
+                    IF (powerup_delay_counter < CYCLES_5MS - 1) THEN
+                        powerup_delay_counter <= powerup_delay_counter + 1;
+                    ELSE
+                        powerup_delay_counter <= 0;
+                        IF (current_mode = MODE_MANUAL) THEN
+                            manual_transaction_done <= '1';
+                            current_mode <= MODE_IDLE;
+                            state <= SCCB_IDLE;
+						 Else
 							state <= SCCB_BEGIN;
-						END IF;
-
-					WHEN SCCB_DONE => 
-						--Done
-						i2c_ena <= '0';
-						IF (start = '0') THEN
-							state <= SCCB_IDLE;
-						END IF;
-				END CASE;
-			END IF;
-		END IF;
-	END PROCESS;
+						End If;
+                    END IF;
+                
+                WHEN SCCB_DONE =>
+                    i2c_ena <= '0';
+                    IF (current_mode = MODE_BOOT) THEN
+                        --Wait for boot_start to deassert
+                        IF (boot_start = '0') THEN
+                            boot_in_progress <= '0';
+                            current_mode <= MODE_IDLE;
+                            state <= SCCB_IDLE;
+                        END IF;
+                    ELSE
+                        --Manual mode will only reach here if there is an error
+                        current_mode <= MODE_IDLE;
+                        state <= SCCB_IDLE;
+                    END IF;
+                    
+            END CASE;
+        END IF;
+    END IF;
+END PROCESS;
 
 	--Read address ROM table
 	PROCESS (clk)
