@@ -6,7 +6,7 @@ This project is designed to work with the [NEORV32 RISC-V Processor](https://git
 
 ## Repository Layout
 - [RTL](RTL) — VHDL source for the camera controller
-- [FPGA Setup/ECP5 EVN Board](FPGA%20Setup/ECP5%20EVN%20Board) — FPGA project/setup files for the ECP5 evaluation board
+- [FPGA Setup](FPGA%20Setup) — FPGA project/setup files for supported FPGA boards
 - [Ada Files/wb_ov5640_helper](Ada%20Files/wb_ov5640_helper) — Ada helper library for controlling the camera interface
 - [Ada Files/wb_ov5640_tests](Ada%20Files/wb_ov5640_tests) — Ada test programs and examples
 
