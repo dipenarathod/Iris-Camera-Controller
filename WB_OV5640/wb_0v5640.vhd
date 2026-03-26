@@ -15,6 +15,10 @@ Entity wb_ov5640 Is
 		IMAGE_RESOLUTION_ADDRESS        : Std_ulogic_vector(31 Downto 0) := x"9001000C"; --[15:0] = image width. [31:16] = image height
 		MASTER_WORDS_TO_READ_ADDRESS    : Std_ulogic_vector(31 Downto 0) := x"90010010"; --32-bit words the master has to read to gather the complete image
 		SCCB_PROGRAM_STATUS_REG_ADDRESS : Std_ulogic_vector(31 Downto 0) := x"90010014"; --Register to show SCCB programmer status. [0] = start latched. [1] = program started. [2] = wrapper busy. [3] = done. [4] = error 
+		SCCB_REG_ADDR_ADDRESS      	 : Std_ulogic_vector(31 DOWNTO 0) := x"90010018";	 --Register address for OV5640 register to be programmed (writtent to over wishbone from client application)
+		SCCB_REG_DATA_ADDRESS      	 : Std_ulogic_vector(31 DOWNTO 0) := x"9001001C";	 --Data for OV5640 register to be programmed (writtent to over wishbone from client application)
+		SCCB_USER_CONTROL_ADDRESS  	 : Std_ulogic_vector(31 DOWNTO 0) := x"90010020";	 --Manual SCCB programmer control register. [0] for start
+		SCCB_USER_STATUS_ADDRESS  	 	 : Std_ulogic_vector(31 DOWNTO 0) := x"90010024";	 --Manual SCCB programmer status register. [0] = busy. [1] = done. [2] = error. [3] = ack for debugging
 		IMAGE_BUFFER_BASE               : Std_ulogic_vector(31 Downto 0) := x"90011000"; --Image buffer base address
 		SYSTEM_CLK_HZ                   : Integer                        := 72_000_000 --System clock frequency in Hz for timing calculations
 	);
@@ -56,11 +60,20 @@ Architecture rtl Of wb_ov5640 Is
 			--SCCB pins
 			SIO_C : Inout Std_ulogic;
 			SIO_D : Inout Std_ulogic;
-			--control
-			start : In    Std_ulogic; --1 to start
-			busy  : Out   Std_ulogic; --0 = idle. 1 = busy
-			done  : Out   Std_ulogic; --0 = not done. 1 = busy
-			err   : Out   Std_ulogic --Included because the I2C controller has it	
+			--Boot-time programming control
+			boot_start : IN  Std_ulogic;  --1 to start boot sequence
+			boot_busy  : OUT Std_ulogic;  --1 during boot programming
+			boot_done  : OUT Std_ulogic;  --1 when boot complete
+			boot_err   : OUT Std_ulogic;  --1 if boot encountered error
+			
+			--Manual write control
+			manual_req      : IN  Std_ulogic;  --Pulse 1 to request write
+			manual_ack      : OUT Std_ulogic;  --1 when request accepted
+			manual_reg_addr : IN  Std_logic_vector(15 DOWNTO 0);
+			manual_reg_data : IN  Std_logic_vector(7 DOWNTO 0);
+			manual_busy     : OUT Std_ulogic;  --1 during manual write
+			manual_done     : OUT Std_ulogic;  --1 when manual write done
+			manual_err      : OUT Std_ulogic   --1 if error when writing
 		);
 	End Component;
 	--Power-up sequence for OV5640:
@@ -99,7 +112,12 @@ Architecture rtl Of wb_ov5640 Is
 	Signal image_resolution_reg : Std_ulogic_vector(31 Downto 0) := (Others => '0');
 	Signal master_words_to_read_reg : Std_ulogic_vector(31 Downto 0) := (Others => '0');
 	Signal sccb_program_status_reg : Std_ulogic_vector(31 Downto 0) := (Others => '0');
+	Signal sccb_reg_addr_reg      : Std_ulogic_vector(31 DOWNTO 0) := (Others => '0');
+	Signal sccb_reg_data_reg      : Std_ulogic_vector(31 DOWNTO 0) := (Others => '0');
+	Signal sccb_user_control_reg  : Std_ulogic_vector(31 DOWNTO 0) := (Others => '0');
+	signal sccb_user_status_reg : std_ulogic_vector(31 downto 0) := (others => '0');
 
+	
 	--Image buffer
 	Signal image_buffer : tensor_mem_type := (Others => (Others => '0'));
 	Signal image_buffer_wb_rdata : Std_ulogic_vector(31 Downto 0) := (Others => '0');
@@ -117,11 +135,17 @@ Architecture rtl Of wb_ov5640 Is
 
 	--Camera interface registers
 	--SCCB controller
-	Signal start_lat : Std_ulogic := '0';
-	Signal busy_lat : Std_ulogic;
-	Signal done_lat : Std_ulogic;
-	Signal err_lat : Std_ulogic;
+	Signal start_lat            : Std_ulogic := '0';
+	Signal boot_busy_lat        : Std_ulogic;
+	Signal boot_done_lat        : Std_ulogic;
+	Signal boot_err_lat         : Std_ulogic;
 	Signal sccb_boot_program_started : Std_ulogic := '0';
+
+	Signal manual_req_pulse     : Std_ulogic := '0';
+	Signal manual_ack_lat       : Std_ulogic;
+	Signal manual_busy          : Std_ulogic;
+	Signal manual_done          : Std_ulogic;
+	Signal manual_err           : Std_ulogic;
 	--Other latches
 	Signal vsync_lat : Std_ulogic;
 	Signal href_lat : Std_ulogic;
@@ -305,14 +329,25 @@ Begin
 	--SCCB controller
 	sccb_controller_inst : sccb_i2c_wrapper
 	Port Map(
-		clk   => clk,
-		reset => reset,
-		SIO_C => SIO_C,
-		SIO_D => SIO_D,
-		start => start_lat,
-		busy  => busy_lat,
-		done  => done_lat,
-		err   => err_lat
+    clk   => clk,
+    reset => reset,
+    SIO_C => SIO_C,
+    SIO_D => SIO_D,
+    
+    --Boot control
+    boot_start => start_lat,
+    boot_busy  => boot_busy_lat,
+    boot_done  => boot_done_lat,
+    boot_err   => boot_err_lat,
+    
+    --Manual control
+    manual_req      => manual_req_pulse,
+    manual_ack      => manual_ack_lat,
+    manual_reg_addr => sccb_reg_addr_reg(15 DOWNTO 0),
+    manual_reg_data => sccb_reg_data_reg(7 DOWNTO 0),
+    manual_busy     => manual_busy,
+    manual_done     => manual_done,
+    manual_err      => manual_err
 	);
 
 	--Start SCCB programming only when camera hardware is ready
@@ -326,7 +361,7 @@ Begin
 				--Only start SCCB programming when camera hardware is ready
 				If (sccb_boot_program_started = '0' And camera_hw_ready = '1') Then
 					start_lat <= '1'; --request sccb wrapper to program the camera
-					If (busy_lat = '1') Then --If wrapper is busy, then it has started
+					If (boot_busy_lat = '1') Then --If wrapper is busy, then it has started
 						start_lat <= '0'; --Deassert start latch input for wrapper
 						sccb_boot_program_started <= '1'; --never request wrapper again
 					End If;
@@ -337,7 +372,24 @@ Begin
 		End If;
 	End Process;
 
-	--Process to set bits of SCCB program status register. [0] = start latched. [1] = program started. [2] = wrapper busy. [3] = done. [4] = error
+	--Process to set bits of manual SCCB programmer status register. [0] = busy [1] = done. [2] = error [3] = ack.
+Process (clk)
+Begin
+    If rising_edge(clk) Then
+        If (reset = '1') Then
+            sccb_user_status_reg <= (Others => '0');
+        Else
+            sccb_user_status_reg(0) <= manual_busy;
+            sccb_user_status_reg(1) <= manual_done;
+            sccb_user_status_reg(2) <= manual_err;
+            sccb_user_status_reg(3) <= manual_ack_lat;
+        End If;
+    End If;
+End Process;
+
+
+
+	--Set bits of auto SCCB programmer status register. [0] = start latched. [1] = program started. [2] = wrapper busy. [3] = done. [4] = error
 	Process (clk)
 	Begin
 		If rising_edge(clk) Then
@@ -350,18 +402,42 @@ Begin
 				If (sccb_boot_program_started = '1') Then
 					sccb_program_status_reg (1) <= '1';
 				End If;
-				If (busy_lat = '1') Then
+				If (boot_busy_lat = '1') Then
 					sccb_program_status_reg (2) <= '1';
 				End If;
-				If (done_lat = '1') Then
+				If (boot_done_lat = '1') Then
 					sccb_program_status_reg (3) <= '1';
 				End If;
-				If (err_lat = '1') Then
+				If (boot_err_lat = '1') Then
 					sccb_program_status_reg (4) <= '1';
 				End If;
 			End If;
 		End If;
 	End Process;
+
+	--Manual write trigger
+	Process (clk)
+		variable wb_write_strobe : std_ulogic;
+	Begin
+		If rising_edge(clk) Then
+			If (reset = '1') Then
+				manual_req_pulse <= '0';
+			Else
+				manual_req_pulse <= '0';  --Pulse is single-cycle (to not trigger multiple writes)
+				
+				wb_write_strobe := wb_req AND i_wb_we; --If the camera controller is selected (on clock high) and writing is enabled, then set strobe to high
+				
+				--Generate pulse when user writes 1 to user programmer control register's 0 bit
+				--Could not use the signal because it takes one additional clock cycle to set
+				If (wb_write_strobe = '1' AND i_wb_addr = SCCB_USER_CONTROL_ADDRESS) Then
+					If (i_wb_data(0) = '1' AND manual_busy = '0') Then
+						manual_req_pulse <= '1';
+					End If;
+				End If;
+			End If;
+		End If;
+	End Process;
+
 
 	--Sync start request + total_pixels into PCLK domain
 	Process (PCLK)
@@ -601,13 +677,13 @@ Begin
 									--Place this Y byte into the current 32-bit word at byte index
 									Case v_byte_idx Is
 										When "00" =>
-											v_word(7 Downto 0) := data_lat;
+											v_word(7 Downto 0) := std_ulogic_vector(to_signed(to_integer(unsigned(data_lat)) - 128, 8));
 										When "01" =>
-											v_word(15 Downto 8) := data_lat;
+											v_word(15 Downto 8) := std_ulogic_vector(to_signed(to_integer(unsigned(data_lat)) - 128, 8));
 										When "10" =>
-											v_word(23 Downto 16) := data_lat;
+											v_word(23 Downto 16) := std_ulogic_vector(to_signed(to_integer(unsigned(data_lat)) - 128, 8));
 										When Others =>
-											v_word(31 Downto 24) := data_lat;
+											v_word(31 Downto 24) := std_ulogic_vector(to_signed(to_integer(unsigned(data_lat)) - 128, 8));
 									End Case;
 
 									is_full_word := (v_byte_idx = "11");
@@ -788,6 +864,18 @@ Begin
 					Elsif (i_wb_addr = SCCB_PROGRAM_STATUS_REG_ADDRESS) Then
 						is_valid := '1';
 						reg_rdata <= sccb_program_status_reg;
+					ELSIF (i_wb_addr = SCCB_REG_ADDR_ADDRESS) THEN
+						is_valid := '1';
+						reg_rdata <= sccb_reg_addr_reg;
+					ELSIF (i_wb_addr = SCCB_REG_DATA_ADDRESS) THEN
+						is_valid := '1';
+						reg_rdata <= sccb_reg_data_reg;
+					ELSIF (i_wb_addr = SCCB_USER_CONTROL_ADDRESS) THEN
+						is_valid := '1';
+						reg_rdata <= sccb_user_control_reg;
+					ELSIF (i_wb_addr = SCCB_USER_STATUS_ADDRESS) THEN
+						is_valid := '1';
+						reg_rdata <= sccb_user_status_reg;
 						--Tensor windows are valid only when idle (npu_busy='0')
 					Elsif (unsigned(i_wb_addr) >= unsigned(IMAGE_BUFFER_BASE) And
 						unsigned(i_wb_addr) < unsigned(IMAGE_BUFFER_BASE) + to_unsigned(TENSOR_BYTES, 32)) Then
@@ -840,6 +928,14 @@ Begin
 					Elsif (i_wb_addr = IMAGE_RESOLUTION_ADDRESS) Then
 						image_resolution_reg <= i_wb_data;
 					Elsif (i_wb_addr = MASTER_WORDS_TO_READ_ADDRESS) Then
+						Null;
+					ELSIF (i_wb_addr = SCCB_REG_ADDR_ADDRESS) THEN
+						sccb_reg_addr_reg <= i_wb_data;
+					ELSIF (i_wb_addr = SCCB_REG_DATA_ADDRESS) THEN
+						sccb_reg_data_reg <= i_wb_data;
+					ELSIF (i_wb_addr = SCCB_USER_CONTROL_ADDRESS) THEN
+						sccb_user_control_reg(0) <= i_wb_data(0);  --Trying something new. The user can only overwrite the start bit
+					ELSIF (i_wb_addr = SCCB_USER_STATUS_ADDRESS) THEN
 						Null;
 					End If;
 				End If;
