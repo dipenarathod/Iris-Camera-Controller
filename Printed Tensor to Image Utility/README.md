@@ -1,4 +1,4 @@
-In your Ada application program, you can use the Print_Tensor_Q07 function from input_output_helper-debug (https://github.com/dipenarathod/neorv32_npu_ecp5u5mg/tree/main/Ada%20Files/input_output_helper) to print the image buffer to the terminal over UART.
+In your Ada application program, you can use the Print_Tensor_Q07 function from input_output_helper-debug (https://github.com/dipenarathod/Wishbone-NPU/tree/main) to print the image buffer to the terminal over UART.
 
 The printed tensor will use int8 Q0.7 numbers.
 
