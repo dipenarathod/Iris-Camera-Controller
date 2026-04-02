@@ -21,7 +21,9 @@ This project is designed to work with the [NEORV32 RISC-V Processor](https://git
 ## Dependencies
 - **[Specific NEORV32 Fork](https://github.com/GNAT-Academic-Program/neorv32-setups)** - The Ada HAL as on 28th March 2026 only works with this fork of the NEORV32. Please refer to Part 1 of the video guide for installation instructions
 - **[NEORV32-HAL](https://github.com/GNAT-Academic-Program/neorv32-hal)** - Base library required to run any Ada Program on the NEORV32
-- **[Input-Output Helper Library](https://github.com/dipenarathod/Input-Output-Helper-Library-for-NEORV32-Ada-Projects)** - Required by the Camera Ada library (WB_OV5640 Helper) in folder Ada files
+- **[Input-Output Helper Library](https://github.com/dipenarathod/Input-Output-Helper-Library-for-NEORV32-Ada-Projects)** - Required by the Camera Ada library (an Ada and C version is depending on what you are using)
+
+**The C library works with the March 7th Build of the NEORV32**
 
 ## Development Environment
 - **Board:** Lattice ECP5U5MG-85F Evaluation Board
