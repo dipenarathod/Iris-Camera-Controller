@@ -15,9 +15,9 @@ This project is designed to work with the [NEORV32 RISC-V Processor](https://git
 ## Repository Layout
 - **RTL** — VHDL source for the camera controller
 - **FPGA-Setup** — FPGA project/setup files for supported FPGA boards
-- **Ada-Files** — Ada helper library for controlling the camera interface and tests file. The tests file folder will also print out an image to the terminal
-- **C-Files**— C helper library for controlling the camera interface and tests file. The tests file folder will also print out an image to the terminal
-- 
+- **Ada-Files** — Ada helper library for controlling the camera interface and test files. The tests file folder will also print out an image to the terminal
+- **C-Files**— C helper library for controlling the camera interface and test files. The tests file folder will also print out an image to the terminal
+  
 ## Dependencies
 - **[Specific NEORV32 Fork](https://github.com/GNAT-Academic-Program/neorv32-setups)** - The Ada HAL as on 28th March 2026 only works with this fork of the NEORV32. Please refer to Part 1 of the video guide for installation instructions
 - **[NEORV32-HAL](https://github.com/GNAT-Academic-Program/neorv32-hal)** - Base library required to run any Ada Program on the NEORV32
