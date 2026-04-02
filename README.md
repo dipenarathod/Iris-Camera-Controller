@@ -10,24 +10,26 @@ This project is designed to work with the [NEORV32 RISC-V Processor](https://git
 - Built-in auto-programmer to program the camera on bootup
 - Supports manual programming via code to use custom image capture settings
 - < 100ms to capture an image (10 FPS)
+- Ada and C support
 
 ## Repository Layout
-- [RTL](RTL) — VHDL source for the camera controller
-- [FPGA Setup](FPGA%20Setup) — FPGA project/setup files for supported FPGA boards
-- [Ada Files/wb_ov5640_helper](Ada%20Files/wb_ov5640_helper) — Ada helper library for controlling the camera interface
-- [Ada Files/wb_ov5640_tests](Ada%20Files/wb_ov5640_tests) — Ada test programs and examples
-
+- **[RTL]** — VHDL source for the camera controller
+- **[FPGA-Setup]** — FPGA project/setup files for supported FPGA boards
+- **[Ada-Files]** — Ada helper library for controlling the camera interface and tests file. The tests file folder will also print out an image to the terminal
+- **[C-Files]**— C helper library for controlling the camera interface and tests file. The tests file folder will also print out an image to the terminal
+- 
 ## Dependencies
 - **[Specific NEORV32 Fork](https://github.com/GNAT-Academic-Program/neorv32-setups)** - The Ada HAL as on 28th March 2026 only works with this fork of the NEORV32. Please refer to Part 1 of the video guide for installation instructions
 - **[NEORV32-HAL](https://github.com/GNAT-Academic-Program/neorv32-hal)** - Base library required to run any Ada Program on the NEORV32
 - **[Input-Output Helper Library](https://github.com/dipenarathod/Input-Output-Helper-Library-for-NEORV32-Ada-Projects)** - Required by the Camera Ada library (WB_OV5640 Helper) in folder Ada files
 
 ## Development Environment
-- Board: Lattice ECP5U5MG-85F Evaluation Board
-- Tools: Lattice Diamond, Synplify Pro
+- **Board:** Lattice ECP5U5MG-85F Evaluation Board
+- **Tools:** Lattice Diamond, Synplify Pro
 
 ## Related Repositories
-- **[Wishbone NPU](https://github.com/dipenarathod/Wishbone-NPU)** - Wishbone Peripheral used to interface the Waveshare OV5640 Camera (Version C) with the NEORV32
+- **[Central Tutorial Repository](https://github.com/dipenarathod/NEORV32-NGTTDS-YT-Central-Repository)** - Central repository with links to all relevant websites, repositories, and video guides
+- **[Wishbone NPU](https://github.com/dipenarathod/Wishbone-NPU)** - Wishbone Peripheral used to accelerate common ML workloads in hardware
 - **[Wishbone Interconnect 1 Master 2 Slaves](https://github.com/dipenarathod/Wishbone-Interconnect-1-Master-2-Slaves)** - Wishbone Interconnect to connect 2 Wishbone Peripherals to a Master. Video in the repository shows how to connect the NEORV32 (controller) to the camera controller and the NPU (2 slaves)
 
 ## Video Guides
